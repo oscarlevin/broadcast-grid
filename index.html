@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Grid Broadcast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=STIX+Two+Text:ital,wght@0,500;0,600;1,400;1,500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="masthead">
+    <p class="eyebrow">Broadcasting with mobile agents</p>
+    <h1>Grid Broadcast</h1>
+    <p class="sub">Agents live on the vertices of the grid <span class="math"><i>P</i><sub><i>m</i></sub> × <i>P</i><sub><i>n</i></sub></span> (<i>m</i> rows, <i>n</i> columns). Each round the tree player chooses a spanning tree, then the agent player moves agents along its edges. Whenever agents share a vertex and one of them is knowledgeable, they all become knowledgeable.</p>
+  </header>
+
+  <section class="stage" aria-label="Game board">
+    <div class="stage-top">
+      <div class="turn" id="turn"></div>
+      <div class="knowledge" id="knowledge"></div>
+    </div>
+
+    <div class="board-wrap">
+      <svg id="board" class="board" role="img" aria-label="Grid graph with agents on its vertices">
+        <defs>
+          <marker id="arrowhead" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path class="arrowhead" d="M0,1 L9,5 L0,9 z"/>
+          </marker>
+        </defs>
+        <g id="g-axes"></g>
+        <g id="g-edges"></g>
+        <g id="g-trails"></g>
+        <g id="g-vertices"></g>
+        <g id="g-agents"></g>
+      </svg>
+    </div>
+
+    <div class="stage-foot">
+      <p class="status" id="status" aria-live="polite"></p>
+
+      <div class="actions" data-for="setup">
+        <div class="seg" role="group" aria-label="What a click on the board does">
+          <button type="button" data-tool="addK"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" class="sw-know"/></svg>Add knowledgeable</button>
+          <button type="button" data-tool="addI"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" class="sw-ign"/></svg>Add ignorant</button>
+          <button type="button" data-tool="toggle"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" class="sw-ign"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" class="sw-half"/></svg>Toggle</button>
+          <button type="button" data-tool="remove"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" class="sw-x"/></svg>Remove</button>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" class="primary" id="btn-start">Start game</button>
+      </div>
+
+      <div class="actions" data-for="tree" hidden>
+        <button type="button" id="btn-tree-undo">Undo</button>
+        <button type="button" id="btn-tree-clear">Clear</button>
+        <button type="button" id="btn-tree-all">All edges</button>
+        <button type="button" id="btn-tree-random">Random tree</button>
+        <button type="button" id="btn-tree-fill">Fill in randomly</button>
+        <button type="button" id="btn-tree-last">Last round’s tree</button>
+        <span class="spacer"></span>
+        <button type="button" class="primary" id="btn-tree-confirm">Confirm tree</button>
+      </div>
+
+      <div class="actions" data-for="move" hidden>
+        <button type="button" id="btn-move-undo">Undo move</button>
+        <button type="button" id="btn-move-reset">Reset moves</button>
+        <button type="button" id="btn-move-retree">Redraw tree</button>
+        <span class="spacer"></span>
+        <button type="button" class="primary" id="btn-move-end">End round</button>
+      </div>
+
+      <div class="actions" data-for="done" hidden>
+        <button type="button" id="btn-done-replay">Replay game</button>
+        <button type="button" id="btn-done-setup">Back to setup</button>
+      </div>
+
+      <div class="actions" data-for="replay" hidden>
+        <div class="player">
+          <button type="button" class="icon" id="rp-first" aria-label="First step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3v10" class="ic-bar"/><path d="M13 3.5v9L6 8z"/></svg></button>
+          <button type="button" class="icon" id="rp-prev" aria-label="Previous step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.5 3.5v9L4.5 8z"/></svg></button>
+          <button type="button" class="icon" id="rp-play" aria-label="Play"></button>
+          <button type="button" class="icon" id="rp-next" aria-label="Next step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3.5v9l7-4.5z"/></svg></button>
+          <button type="button" class="icon" id="rp-last" aria-label="Last step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5v9L10 8z"/><path d="M12.5 3v10" class="ic-bar"/></svg></button>
+          <input type="range" id="rp-slider" min="0" max="0" value="0" aria-label="Replay position">
+          <span class="rp-label" id="rp-label"></span>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" id="rp-resume">Continue from here</button>
+        <button type="button" class="primary" id="rp-exit">Back to live game</button>
+      </div>
+    </div>
+
+    <ul class="legend" aria-label="Legend">
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><circle cx="11" cy="8" r="5" class="lg-know"/></svg>Knowledgeable</li>
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><circle cx="11" cy="8" r="5" class="lg-ign"/></svg>Ignorant</li>
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><circle cx="11" cy="8" r="4.4" class="lg-know"/><circle cx="11" cy="8" r="7" class="lg-learn"/></svg>Learns this round</li>
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><path d="M2 8h18" class="lg-tree"/></svg>Tree edge</li>
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><path d="M2 8h18" class="lg-off"/></svg>Not in tree</li>
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><path d="M2 8h18" class="lg-cyc"/></svg>On a cycle</li>
+      <li><svg viewBox="0 0 22 16" aria-hidden="true"><path d="M2 8h12" class="lg-move"/><path d="M13 4.5 19 8l-6 3.5z" class="lg-arrow"/></svg>Move this round</li>
+    </ul>
+
+    <div class="toast" id="toast" role="status"></div>
+  </section>
+
+  <div class="panels">
+    <section class="panel" aria-labelledby="setup-title">
+      <div class="panel-head"><h2 id="setup-title">Game setup</h2></div>
+      <fieldset id="setup-fields">
+        <div class="group">
+          <h3>Graph</h3>
+          <div class="fields">
+            <div class="field">
+              <label for="in-rows">Rows <span class="math"><i>m</i></span></label>
+              <input type="number" id="in-rows" min="1" max="10" step="1">
+            </div>
+            <div class="field">
+              <label for="in-n">Columns <span class="math"><i>n</i></span></label>
+              <input type="number" id="in-n" min="2" max="30" step="1">
+            </div>
+          </div>
+          <p class="hint" id="graph-info"></p>
+        </div>
+
+        <div class="group">
+          <h3>Agents</h3>
+          <div class="fields">
+            <div class="field">
+              <label for="in-m">Agents</label>
+              <input type="number" id="in-m" min="1" max="80" step="1">
+            </div>
+            <div class="field">
+              <label for="in-k">Knowledgeable</label>
+              <input type="number" id="in-k" min="0" max="80" step="1">
+            </div>
+            <button type="button" id="btn-random-place">Place at random</button>
+            <button type="button" id="btn-clear-agents">Remove all</button>
+          </div>
+          <p class="hint">Or place agents by hand with the tools under the board. Several agents may share a vertex.</p>
+        </div>
+
+        <div class="group">
+          <h3>Rules</h3>
+          <div class="fields">
+            <div class="field">
+              <label for="in-steps">Steps per agent per round</label>
+              <input type="number" id="in-steps" min="1" max="6" step="1">
+            </div>
+          </div>
+          <div class="radio" role="radiogroup" aria-label="When knowledge is shared">
+            <label><input type="radio" name="exchange" id="ex-end" value="end"><span><strong>Share at the end of the round.</strong> All agents move at once. Agents that share a vertex after the moves share knowledge.</span></label>
+            <label><input type="radio" name="exchange" id="ex-land" value="land"><span><strong>Share on landing.</strong> Agents move one at a time and learn the moment they land with a knowledgeable agent, so knowledge can relay within a round.</span></label>
+          </div>
+        </div>
+      </fieldset>
+      <div class="lockbar" id="lockbar" hidden>
+        <p>Setup and rules are fixed while a game is in progress.</p>
+        <button type="button" id="btn-back-setup">Back to setup</button>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="history-title">
+      <div class="panel-head">
+        <h2 id="history-title">History</h2>
+        <div class="panel-tools">
+          <button type="button" id="btn-replay">Replay</button>
+          <button type="button" id="btn-copy">Copy JSON</button>
+          <button type="button" id="btn-download" hidden>Download</button>
+          <button type="button" id="btn-load">Load…</button>
+        </div>
+      </div>
+      <p class="empty" id="history-empty">Start a game to record it here. Each round stores the tree that was chosen and where the agents ended up. Click any entry to replay from that point.</p>
+      <ol class="history" id="history"></ol>
+    </section>
+  </div>
+
+  <footer class="keys">
+    <span><kbd>Enter</kbd> confirm tree / end round</span>
+    <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
+    <span><kbd>Esc</kbd> clear selection</span>
+    <span><kbd>R</kbd> random tree</span>
+    <span><kbd>←</kbd> <kbd>→</kbd> <kbd>Space</kbd> replay</span>
+  </footer>
+</div>
+
+<dialog id="dlg" aria-labelledby="dlg-title">
+  <form method="dialog" id="dlg-form">
+    <h2 id="dlg-title">Load a saved game</h2>
+    <p class="hint" id="dlg-hint"></p>
+    <input type="file" id="dlg-file" accept=".json,application/json">
+    <textarea id="dlg-text" rows="10" spellcheck="false" aria-label="Game JSON"></textarea>
+    <p class="error" id="dlg-error" hidden></p>
+    <div class="actions">
+      <span class="spacer"></span>
+      <button type="button" id="dlg-cancel">Close</button>
+      <button type="submit" class="primary" id="dlg-ok">Load game</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
