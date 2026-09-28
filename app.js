@@ -1,12 +1,16 @@
 /* Grid Broadcast
  *
- * Mobile agents on the grid Pm x Pn. Each round the tree player picks a
- * spanning tree, then the agent player moves agents along tree edges. Agents
- * that share a vertex share knowledge.
+ * Mobile agents on a graph. Each round the tree player picks a spanning tree,
+ * then the agent player moves agents along tree edges. Agents that share a
+ * vertex share knowledge.
  *
- * Vertices are numbered v = r*n + c; row r is labelled a, b, c, ... and column c
- * is labelled 1..n, so vertex b3 is (r, c) = (1, 2).
- * Edges are numbered: vertical edges first (row by row), then horizontal edges.
+ * Two kinds of graph:
+ *  - grid: Pm x Pn. Vertex v = r*n + c; row r is labelled a, b, c, ... and
+ *    column c is labelled 1..n, so vertex b3 is (r, c) = (1, 2). Edges are
+ *    numbered vertical edges first (row by row), then horizontal edges.
+ *  - circle: k <= 7 vertices v1..vk evenly spaced on a circle, with any set of
+ *    edges the user draws (a subgraph of Kk). Edges are numbered in
+ *    lexicographic order of their endpoints.
  */
 (() => {
   'use strict';
@@ -14,38 +18,145 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const STORE_KEY = 'grid-broadcast/v1';
   const GAP = 104, PAD_L = 72, PAD_R = 50, PAD_T = 62, PAD_B = 42, VR = 24;
-  const MAX_ROWS = 10, MAX_COLS = 30, MAX_AGENTS = 80, MAX_STEPS = 6, PLAY_MS = 1100;
+  const CIRCLE_R = 150, CIRCLE_LABEL = 46, CIRCLE_PAD = 26;
+  const MAX_ROWS = 10, MAX_COLS = 30, MAX_CIRCLE = 7;
+  const MAX_AGENTS = 80, MAX_STEPS = 6, PLAY_MS = 1100;
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
   // ---------------------------------------------------------------- graph
 
+  // G = { kind, V, edges: [{id, a, b}], adj: [[{v, e}]], px, py, W, H, name(v), nameHTML(v), ... }
   let G;
 
-  function buildGraph(rows, n) {
-    const V = rows * n, edges = [], adj = Array.from({ length: V }, () => []);
-    const add = (a, b) => {
+  function withEdges(V, pairs) {
+    const edges = [], adj = Array.from({ length: V }, () => []);
+    for (const [a, b] of pairs) {
       const id = edges.length;
       edges.push({ id, a, b });
       adj[a].push({ v: b, e: id });
       adj[b].push({ v: a, e: id });
-    };
-    for (let r = 0; r + 1 < rows; r++) for (let c = 0; c < n; c++) add(r * n + c, (r + 1) * n + c);
-    for (let r = 0; r < rows; r++) for (let c = 0; c + 1 < n; c++) add(r * n + c, r * n + c + 1);
-    return { rows, n, V, edges, adj };
+    }
+    return { V, edges, adj };
   }
 
-  const edgeCount = (rows, n) => rows * (n - 1) + (rows - 1) * n;
   const rowName = (r) => String.fromCharCode(97 + r);
-  const vx = (v) => PAD_L + (v % G.n) * GAP;
-  const vy = (v) => PAD_T + Math.floor(v / G.n) * GAP;
-  const label = (v) => rowName(Math.floor(v / G.n)) + ((v % G.n) + 1);
-  const labelHTML = (v) => `<span class="vl"><i>${rowName(Math.floor(v / G.n))}</i><sub>${(v % G.n) + 1}</sub></span>`;
+
+  function gridGraph(rows, n) {
+    const pairs = [];
+    for (let r = 0; r + 1 < rows; r++) for (let c = 0; c < n; c++) pairs.push([r * n + c, (r + 1) * n + c]);
+    for (let r = 0; r < rows; r++) for (let c = 0; c + 1 < n; c++) pairs.push([r * n + c, r * n + c + 1]);
+    const V = rows * n, px = [], py = [], order = [];
+    for (let v = 0; v < V; v++) {
+      const r = Math.floor(v / n), c = v % n;
+      px.push(PAD_L + c * GAP);
+      py.push(PAD_T + r * GAP);
+      order.push(c * rows + r); // column by column, so agent numbers read left to right
+    }
+    return {
+      kind: 'grid', rows, n, px, py, order, ...withEdges(V, pairs),
+      W: PAD_L + PAD_R + (n - 1) * GAP,
+      H: PAD_T + PAD_B + (rows - 1) * GAP,
+      name: (v) => rowName(Math.floor(v / n)) + ((v % n) + 1),
+      nameParts: (v) => [rowName(Math.floor(v / n)), (v % n) + 1],
+    };
+  }
+
+  // The k vertices sit clockwise from the top of a circle.
+  function circleGraph(k, pairs) {
+    const c = CIRCLE_PAD + CIRCLE_LABEL + CIRCLE_R, px = [], py = [], order = [];
+    for (let v = 0; v < k; v++) {
+      const t = -Math.PI / 2 + (2 * Math.PI * v) / k;
+      px.push(c + CIRCLE_R * Math.cos(t));
+      py.push(c + CIRCLE_R * Math.sin(t));
+      order.push(v);
+    }
+    return {
+      kind: 'circle', k, px, py, order, center: c, ...withEdges(k, pairs),
+      W: 2 * c,
+      H: 2 * c,
+      name: (v) => 'v' + (v + 1),
+      nameParts: (v) => ['v', v + 1],
+    };
+  }
+
+  function graphFromState(s) {
+    return s.kind === 'circle' ? circleGraph(s.circle.k, s.circle.edges) : gridGraph(s.rows, s.n);
+  }
+
+  // Every pair of circle vertices: the potential edges of Kk. Pair ids are a*8 + b.
+  const pairId = (a, b) => Math.min(a, b) * 8 + Math.max(a, b);
+  function allPairs(k) {
+    const out = [];
+    for (let a = 0; a < k; a++) for (let b = a + 1; b < k; b++) out.push({ id: pairId(a, b), a, b });
+    return out;
+  }
+
+  // Sorted, de-duplicated edge list for a circle graph on k vertices.
+  function normalizePairs(k, pairs) {
+    const ids = new Set();
+    for (const p of pairs) {
+      if (!Array.isArray(p)) continue;
+      const [a, b] = p;
+      if (Number.isInteger(a) && Number.isInteger(b) && a !== b && a >= 0 && b >= 0 && a < k && b < k) ids.add(pairId(a, b));
+    }
+    return [...ids].sort((x, y) => x - y).map((id) => [Math.floor(id / 8), id % 8]);
+  }
+
+  const circlePresets = {
+    cycle: (k) => Array.from({ length: k }, (_, i) => [i, (i + 1) % k]).filter(([a, b]) => k > 2 || a < b),
+    path: (k) => Array.from({ length: k - 1 }, (_, i) => [i, i + 1]),
+    star: (k) => Array.from({ length: k - 1 }, (_, i) => [0, i + 1]),
+    complete: (k) => allPairs(k).map(({ a, b }) => [a, b]),
+    empty: () => [],
+  };
+
+  const vx = (v) => G.px[v];
+  const vy = (v) => G.py[v];
+  const label = (v) => G.name(v);
+  const labelHTML = (v) => {
+    const [l, i] = G.nameParts(v);
+    return `<span class="vl"><i>${l}</i><sub>${i}</sub></span>`;
+  };
+
+  function isConnected() {
+    const uf = makeUF(G.V);
+    let comps = G.V;
+    for (const e of G.edges) if (uf.union(e.a, e.b)) comps--;
+    return comps === 1;
+  }
+
+  // Number of spanning trees of any graph: a cofactor of the Laplacian (Bareiss elimination).
+  function treeCountExact() {
+    const N = G.V - 1;
+    if (N <= 0) return 1n;
+    const M = Array.from({ length: N }, () => new Array(N).fill(0n));
+    for (const { a, b } of G.edges) {
+      if (a < N) M[a][a] += 1n;
+      if (b < N) M[b][b] += 1n;
+      if (a < N && b < N) { M[a][b] -= 1n; M[b][a] -= 1n; }
+    }
+    let prev = 1n, sign = 1n;
+    for (let k = 0; k < N; k++) {
+      if (M[k][k] === 0n) {
+        let r = k + 1;
+        while (r < N && M[r][k] === 0n) r++;
+        if (r === N) return 0n;
+        [M[k], M[r]] = [M[r], M[k]];
+        sign = -sign;
+      }
+      for (let i = k + 1; i < N; i++) {
+        for (let j = k + 1; j < N; j++) M[i][j] = (M[i][j] * M[k][k] - M[i][k] * M[k][j]) / prev;
+      }
+      prev = M[k][k];
+    }
+    return sign * M[N - 1][N - 1];
+  }
 
   // Number of spanning trees of Pm x Pn by the matrix-tree theorem: the Laplacian
   // eigenvalues are (2 - 2cos(pi j/m)) + (2 - 2cos(pi k/n)). Returns HTML.
-  function spanningTreeCount(rows, n) {
+  function gridTreeCount(rows, n) {
     const lam = (k, m) => 2 - 2 * Math.cos((Math.PI * k) / m);
     let log = -Math.log10(rows * n), prod = 1 / (rows * n);
     for (let j = 0; j < rows; j++) {
@@ -149,7 +260,9 @@
     playing: null,  // interval id during replay playback
     undo: [],       // snapshots for undo within the current phase
     down: null,     // pointer gesture in progress
-    stroke: null,   // edge-painting drag in the tree phase
+    stroke: null,   // edge-painting drag (tree phase, or editing a circle graph)
+    link: null,     // vertex-to-vertex drag while editing a circle graph
+    linkFrom: null, // first vertex clicked while editing a circle graph
     drag: null,
     dropV: null,
     view: null,
@@ -159,8 +272,10 @@
     const rows = 3, n = 6, at = (r, c) => r * n + c;
     return {
       version: 1,
+      kind: 'grid',
       rows,
       n,
+      circle: { k: 7, edges: normalizePairs(7, circlePresets.cycle(7)) },
       rules: { steps: 1, exchange: 'end' },
       setup: [
         { pos: at(0, 0), know: true },
@@ -187,7 +302,11 @@
       const n = s.n, rows = s.rows ?? 2; // files saved before rows existed were ladders
       if (!Number.isInteger(n) || n < 2 || n > MAX_COLS) return null;
       if (!Number.isInteger(rows) || rows < 1 || rows > MAX_ROWS) return null;
-      const V = rows * n, E = edgeCount(rows, n);
+      const kind = s.kind === 'circle' ? 'circle' : 'grid';
+      const k = clampInt(s.circle?.k, 2, MAX_CIRCLE, 7);
+      const circle = { k, edges: normalizePairs(k, Array.isArray(s.circle?.edges) ? s.circle.edges : circlePresets.cycle(k)) };
+      const g = graphFromState({ kind, rows, n, circle });
+      const V = g.V, E = g.edges.length;
       const isV = (x) => Number.isInteger(x) && x >= 0 && x < V;
       const isE = (x) => Number.isInteger(x) && x >= 0 && x < E;
       if (!Array.isArray(s.setup) || s.setup.length > MAX_AGENTS || !s.setup.every((x) => x && isV(x.pos))) return null;
@@ -217,8 +336,10 @@
 
       return {
         version: 1,
+        kind,
         rows,
         n,
+        circle,
         rules: {
           steps: clampInt(s.rules?.steps, 1, MAX_STEPS, 1),
           exchange: s.rules?.exchange === 'land' ? 'land' : 'end',
@@ -313,22 +434,30 @@
   function commit() { save(); render(); }
 
   function pushUndo() {
-    ui.undo.push(JSON.stringify({ setup: S.setup, tree: S.tree, plan: S.plan }));
+    ui.undo.push(JSON.stringify({ setup: S.setup, tree: S.tree, plan: S.plan, circleEdges: S.circle.edges }));
     if (ui.undo.length > 300) ui.undo.shift();
   }
 
   function undo() {
     if (ui.replay !== null || !ui.undo.length) return;
     const snap = JSON.parse(ui.undo.pop());
-    if (S.phase === 'setup') { S.setup = snap.setup; syncCountInputs(); }
-    else if (S.phase === 'tree') S.tree = snap.tree;
+    if (S.phase === 'setup') {
+      S.setup = snap.setup;
+      if (JSON.stringify(S.circle.edges) !== JSON.stringify(snap.circleEdges)) {
+        S.circle.edges = snap.circleEdges;
+        buildBoard();
+      }
+      syncCountInputs();
+    } else if (S.phase === 'tree') S.tree = snap.tree;
     else if (S.phase === 'move') S.plan = snap.plan;
     ui.selected = null;
+    ui.linkFrom = null;
     commit();
   }
 
   function startGame() {
-    if (!S.setup.length) return;
+    if (!S.setup.length || !isConnected()) return;
+    ui.linkFrom = null;
     const pos = S.setup.map((x) => x.pos);
     const know = share(pos, S.setup.map((x) => x.know));
     S.history = [{ kind: 'start', round: 0, tree: null, pos, know }];
@@ -433,8 +562,8 @@
     const spots = m <= G.V
       ? shuffle([...Array(G.V).keys()]).slice(0, m)
       : Array.from({ length: m }, () => Math.floor(Math.random() * G.V));
-    // Number agents left to right so labels are easy to find.
-    spots.sort((p, q) => (p % G.n) - (q % G.n) || p - q);
+    // Number agents in reading order so labels are easy to find.
+    spots.sort((p, q) => G.order[p] - G.order[q]);
     const knowing = new Set(shuffle([...Array(m).keys()]).slice(0, k));
     S.setup = spots.map((pos, a) => ({ pos, know: knowing.has(a) }));
     syncCountInputs();
@@ -443,7 +572,7 @@
 
   // Change the grid size, pulling agents that fall off the edge onto the last row/column.
   function setSize(rows, n) {
-    if (S.phase !== 'setup' || (rows === S.rows && n === S.n)) return;
+    if (S.phase !== 'setup' || S.kind !== 'grid' || (rows === S.rows && n === S.n)) return;
     const old = S.n;
     for (const x of S.setup) {
       const r = Math.min(Math.floor(x.pos / old), rows - 1), c = Math.min(x.pos % old, n - 1);
@@ -454,6 +583,55 @@
     ui.undo = [];
     buildBoard();
     commit();
+  }
+
+  // Switch between the grid and the circle graph; agents keep their vertex number mod V.
+  function setKind(kind) {
+    if (S.phase !== 'setup' || kind === S.kind) return;
+    S.kind = kind;
+    const V = graphFromState(S).V;
+    for (const x of S.setup) x.pos %= V;
+    if (kind === 'circle') ui.tool = 'edges';
+    else if (ui.tool === 'edges') ui.tool = 'addK';
+    ui.linkFrom = null;
+    ui.undo = [];
+    buildBoard();
+    commit();
+  }
+
+  // Change the number of circle vertices, dropping edges and moving agents off removed vertices.
+  function setCircleSize(k) {
+    if (S.phase !== 'setup' || k === S.circle.k) return;
+    const old = S.circle.k;
+    let edges = normalizePairs(k, S.circle.edges);
+    // Keep a cycle a cycle: reconnect the last vertex to v1 when the old graph was a cycle.
+    if (JSON.stringify(S.circle.edges) === JSON.stringify(normalizePairs(old, circlePresets.cycle(old)))) {
+      edges = normalizePairs(k, circlePresets.cycle(k));
+    }
+    S.circle = { k, edges };
+    for (const x of S.setup) x.pos = Math.min(x.pos, k - 1);
+    ui.linkFrom = null;
+    ui.undo = [];
+    buildBoard();
+    commit();
+  }
+
+  function setCircleEdges(pairs) {
+    if (S.phase !== 'setup' || S.kind !== 'circle') return;
+    pushUndo();
+    S.circle.edges = normalizePairs(S.circle.k, pairs);
+    ui.linkFrom = null;
+    buildBoard();
+    commit();
+  }
+
+  const hasCircleEdge = (a, b) => S.circle.edges.some(([x, y]) => pairId(x, y) === pairId(a, b));
+
+  function toggleCircleEdge(a, b) {
+    if (a === b) return;
+    setCircleEdges(hasCircleEdge(a, b)
+      ? S.circle.edges.filter(([x, y]) => pairId(x, y) !== pairId(a, b))
+      : [...S.circle.edges, [a, b]]);
   }
 
   // ---------------------------------------------------------------- replay
@@ -518,8 +696,16 @@
       version: 1,
       saved: new Date().toISOString(),
       summary: {
-        graph: `P${S.rows} x P${S.n}`,
-        vertices: 'row letter + column number, e.g. b3 = second row, third column',
+        ...(G.kind === 'grid'
+          ? {
+            graph: `P${S.rows} x P${S.n}`,
+            vertices: 'row letter + column number, e.g. b3 = second row, third column',
+          }
+          : {
+            graph: `circle graph on ${G.V} vertices`,
+            vertices: 'v1..vk clockwise from the top',
+            edges: G.edges.map((e) => `${L(e.a)}-${L(e.b)}`),
+          }),
         rules: S.rules,
         start: S.history[0]
           ? S.history[0].pos.map((v, a) => ({ agent: a + 1, at: L(v), knowledgeable: S.history[0].know[a] }))
@@ -558,7 +744,13 @@
   const els = {
     board: $('#board'),
     gAxes: $('#g-axes'),
+    gGhosts: $('#g-ghosts'),
     gEdges: $('#g-edges'),
+    linkBand: $('#link-band'),
+    kindSeg: $('#kind-seg'),
+    gridFields: $('#grid-fields'),
+    circleFields: $('#circle-fields'),
+    inCv: $('#in-cv'),
     gTrails: $('#g-trails'),
     gVertices: $('#g-vertices'),
     gAgents: $('#g-agents'),
@@ -630,29 +822,54 @@
   }
 
   function buildBoard() {
-    G = buildGraph(S.rows, S.n);
-    const W = PAD_L + PAD_R + (G.n - 1) * GAP, H = PAD_T + PAD_B + (G.rows - 1) * GAP;
+    G = graphFromState(S);
+    const { W, H } = G;
     const b = els.board;
     b.setAttribute('viewBox', `0 0 ${W} ${H}`);
-    // Scale up to 1.45x, but keep tall grids from growing past ~640px high.
+    // Scale up to 1.45x, but keep tall graphs from growing past ~640px high.
     const maxW = W * Math.min(1.45, 640 / H);
     b.style.maxWidth = Math.round(maxW) + 'px';
     b.style.minWidth = Math.round(Math.min(W * 0.6, maxW)) + 'px';
-    for (const g of [els.gAxes, els.gEdges, els.gTrails, els.gVertices, els.gAgents]) g.replaceChildren();
+    for (const g of [els.gAxes, els.gGhosts, els.gEdges, els.gTrails, els.gVertices, els.gAgents]) g.replaceChildren();
 
-    for (let c = 0; c < G.n; c++) {
-      const t = svg('text', { x: PAD_L + c * GAP, y: PAD_T - VR - 14, class: 'axis-col' });
-      t.textContent = c + 1;
-      els.gAxes.append(t);
-    }
-    for (let r = 0; r < G.rows; r++) {
-      const t = svg('text', { x: PAD_L - VR - 22, y: PAD_T + r * GAP + 6, class: 'axis-row' });
-      t.textContent = rowName(r);
-      els.gAxes.append(t);
+    if (G.kind === 'grid') {
+      for (let c = 0; c < G.n; c++) {
+        const t = svg('text', { x: PAD_L + c * GAP, y: PAD_T - VR - 14, class: 'axis-col' });
+        t.textContent = c + 1;
+        els.gAxes.append(t);
+      }
+      for (let r = 0; r < G.rows; r++) {
+        const t = svg('text', { x: PAD_L - VR - 22, y: PAD_T + r * GAP + 6, class: 'axis-row' });
+        t.textContent = rowName(r);
+        els.gAxes.append(t);
+      }
+    } else {
+      // Vertex names just outside the circle, and faint lines for every edge not yet drawn.
+      for (let v = 0; v < G.V; v++) {
+        const dx = vx(v) - G.center, dy = vy(v) - G.center, d = Math.hypot(dx, dy) || 1;
+        const t = svg('text', {
+          x: vx(v) + (dx / d) * (VR + 20),
+          y: vy(v) + (dy / d) * (VR + 20) + 6,
+          class: 'vlabel',
+        });
+        const letter = svg('tspan');
+        letter.textContent = 'v';
+        const idx = svg('tspan', { class: 'idx', dy: 4 });
+        idx.textContent = v + 1;
+        t.append(letter, idx);
+        els.gAxes.append(t);
+      }
+      for (const p of allPairs(G.V)) {
+        if (hasCircleEdge(p.a, p.b)) continue;
+        const c = { x1: vx(p.a), y1: vy(p.a), x2: vx(p.b), y2: vy(p.b) };
+        const g = svg('g', { class: 'ghost', 'data-p': p.id });
+        g.append(svg('line', { ...c, class: 'ghost-line' }), svg('line', { ...c, class: 'edge-hit' }));
+        els.gGhosts.append(g);
+      }
     }
 
     edgeEls = G.edges.map((e) => {
-      const g = svg('g', { class: 'edge', 'data-e': e.id });
+      const g = svg('g', { class: 'edge', 'data-e': e.id, ...(G.kind === 'circle' ? { 'data-p': pairId(e.a, e.b) } : {}) });
       const c = { x1: vx(e.a), y1: vy(e.a), x2: vx(e.b), y2: vy(e.b) };
       g.append(svg('line', { ...c, class: 'edge-line' }), svg('line', { ...c, class: 'edge-hit' }));
       els.gEdges.append(g);
@@ -806,7 +1023,7 @@
   function render() {
     const view = computeView();
     ui.view = view;
-    els.board.setAttribute('class', `board mode-${view.mode}`);
+    els.board.setAttribute('class', `board mode-${view.mode}${editingGraph() ? ' tool-edges' : ''}`);
 
     for (const e of G.edges) {
       let c = 'edge';
@@ -825,6 +1042,7 @@
       if (t) c += ' target';
       if (t === 'return') c += ' return';
       if (ui.dropV === v) c += ' drop';
+      if (ui.linkFrom === v) c += ' linking';
       vertexEls[v].setAttribute('class', c);
     }
 
@@ -885,8 +1103,15 @@
           toggle: 'Click an agent to switch it between knowledgeable and ignorant.',
           remove: 'Click an agent to remove it.',
         };
-        html = `${tips[ui.tool]} Drag agents to move them.`;
-        if (!m) html += ' <span class="warn">Add at least one agent to start.</span>';
+        if (editingGraph()) {
+          html = ui.linkFrom !== null
+            ? `Click another vertex to connect it to ${labelHTML(ui.linkFrom)}, or click ${labelHTML(ui.linkFrom)} again to cancel.`
+            : 'Drag from one vertex to another, or click two vertices in turn, to add or remove the edge between them. Click or drag across an edge to remove it.';
+        } else {
+          html = `${tips[ui.tool]} Drag agents to move them.`;
+        }
+        if (!isConnected()) html += ' <span class="warn">The graph is not connected yet, so it has no spanning tree.</span>';
+        else if (!m) html += ' <span class="warn">Add at least one agent to start.</span>';
         else if (!view.know.some(Boolean)) html += ' <span class="warn">No agent is knowledgeable yet, so nothing can spread.</span>';
         break;
       }
@@ -946,8 +1171,11 @@
   function renderActions(view) {
     for (const g of $$('.actions[data-for]')) g.hidden = g.dataset.for !== view.mode;
     if (view.mode === 'setup') {
-      for (const b of $$('[data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === ui.tool));
-      btn.start.disabled = !S.setup.length;
+      for (const b of $$('[data-tool]')) {
+        b.setAttribute('aria-pressed', String(b.dataset.tool === ui.tool));
+        if (b.dataset.tool === 'edges') b.hidden = S.kind !== 'circle';
+      }
+      btn.start.disabled = !S.setup.length || !isConnected();
     } else if (view.mode === 'tree') {
       const an = view.analysis;
       btn.treeUndo.disabled = !ui.undo.length;
@@ -985,18 +1213,30 @@
     const inSetup = S.phase === 'setup';
     els.setupFields.disabled = !inSetup;
     els.lockbar.hidden = inSetup;
+    for (const b of els.kindSeg.querySelectorAll('[data-kind]')) b.setAttribute('aria-pressed', String(b.dataset.kind === S.kind));
+    els.gridFields.hidden = S.kind !== 'grid';
+    els.circleFields.hidden = S.kind !== 'circle';
     setVal(els.inRows, S.rows);
     setVal(els.inN, S.n);
+    setVal(els.inCv, S.circle.k);
     setVal(els.inSteps, S.rules.steps);
     els.exEnd.checked = S.rules.exchange === 'end';
     els.exLand.checked = S.rules.exchange === 'land';
-    if (els.graphInfo.dataset.size !== `${G.rows}x${G.n}`) {
-      const er = Math.min(1, G.rows - 1), ec = Math.min(2, G.n - 1);
-      els.graphInfo.dataset.size = `${G.rows}x${G.n}`;
-      els.graphInfo.innerHTML =
-        `<b>${G.V}</b> vertices, <b>${G.edges.length}</b> edges. ` +
-        `Every spanning tree has <b>${G.V - 1}</b> edges, and there are <b>${spanningTreeCount(G.rows, G.n)}</b> of them. ` +
-        `Vertex ${labelHTML(er * G.n + ec)} is in row ${rowName(er)}, column ${ec + 1}.`;
+
+    const key = G.kind === 'grid' ? `grid ${G.rows}x${G.n}` : `circle ${JSON.stringify(S.circle)}`;
+    if (els.graphInfo.dataset.key !== key) {
+      els.graphInfo.dataset.key = key;
+      let html = `<b>${G.V}</b> vertices, <b>${G.edges.length}</b> edge${G.edges.length === 1 ? '' : 's'}. `;
+      if (G.kind === 'grid') {
+        const er = Math.min(1, G.rows - 1), ec = Math.min(2, G.n - 1);
+        html += `Every spanning tree has <b>${G.V - 1}</b> edges, and there are <b>${gridTreeCount(G.rows, G.n)}</b> of them. ` +
+          `Vertex ${labelHTML(er * G.n + ec)} is in row ${rowName(er)}, column ${ec + 1}.`;
+      } else if (isConnected()) {
+        html += `Every spanning tree has <b>${G.V - 1}</b> edges, and there ${G.edges.length === G.V - 1 ? 'is just <b>1</b>: the graph is already a tree.' : `are <b>${treeCountExact().toLocaleString('en-US')}</b> of them.`}`;
+      } else {
+        html += 'It is not connected yet, so it has no spanning tree.';
+      }
+      els.graphInfo.innerHTML = html;
     }
     btn.replay.disabled = S.history.length < 2;
   }
@@ -1101,53 +1341,78 @@
     return ui.view.targets.has(v);
   }
 
-  // ---- tree phase: click or drag across edges to paint them in or out
+  // ---- painting edges: click or drag across edges to add or remove them.
+  // A 'tree' stroke edits the tree player's selection; a 'graph' stroke edits
+  // the edges of a circle graph during setup (over every pair of vertices).
 
-  // Distance from point p to the segment of edge e.
-  function segDist(p, e) {
-    const x1 = vx(e.a), y1 = vy(e.a), dx = vx(e.b) - x1, dy = vy(e.b) - y1;
+  const editingGraph = () =>
+    ui.replay === null && S.phase === 'setup' && S.kind === 'circle' && ui.tool === 'edges';
+
+  const strokeTargets = {
+    tree: {
+      segs: () => G.edges,
+      has: (id) => S.tree.includes(id),
+      set: (id, on) => { S.tree = on ? [...S.tree, id] : S.tree.filter((x) => x !== id); },
+    },
+    graph: {
+      segs: () => allPairs(G.V),
+      has: (id) => hasCircleEdge(Math.floor(id / 8), id % 8),
+      set: (id, on) => {
+        const a = Math.floor(id / 8), b = id % 8;
+        S.circle.edges = normalizePairs(S.circle.k, on
+          ? [...S.circle.edges, [a, b]]
+          : S.circle.edges.filter(([x, y]) => pairId(x, y) !== id));
+        buildBoard();
+      },
+    },
+  };
+
+  // Distance from point p to the segment from vertex a to vertex b.
+  function segDist(p, { a, b }) {
+    const x1 = vx(a), y1 = vy(a), dx = vx(b) - x1, dy = vy(b) - y1;
     const t = Math.max(0, Math.min(1, ((p.x - x1) * dx + (p.y - y1) * dy) / (dx * dx + dy * dy)));
     return Math.hypot(p.x - x1 - t * dx, p.y - y1 - t * dy);
   }
 
-  // The edge under point p, ignoring the vertex discs where several edges meet.
-  function edgeAt(p, tol = 16) {
+  // The segment under point p, ignoring the vertex discs where several edges meet.
+  function edgeAt(p, segs, tol = 16) {
     if (nearestVertex(p, VR + 2) !== null) return null;
     let best = null, bd = tol;
-    for (const e of G.edges) {
-      const d = segDist(p, e);
-      if (d < bd) { bd = d; best = e.id; }
+    for (const s of segs) {
+      const d = segDist(p, s);
+      if (d < bd) { bd = d; best = s.id; }
     }
     return best;
   }
 
   // The first edge a stroke touches decides whether the stroke adds or removes.
-  function paintEdge(e) {
-    if (S.phase !== 'tree' || ui.replay !== null) return;
-    const s = ui.stroke, sel = new Set(S.tree), has = sel.has(e);
+  function paintEdge(id) {
+    const s = ui.stroke;
+    if (s.kind === 'tree' ? S.phase !== 'tree' || ui.replay !== null : !editingGraph()) return;
+    const target = strokeTargets[s.kind], has = target.has(id);
     if (s.mode === null) s.mode = has ? 'remove' : 'add';
     if ((s.mode === 'add') === has) return;
     if (!s.changed) { pushUndo(); s.changed = true; }
-    if (has) sel.delete(e); else sel.add(e);
-    S.tree = [...sel];
+    target.set(id, !has);
     render();
   }
 
-  function beginStroke(e) {
-    ui.stroke = { id: e.pointerId, mode: null, changed: false, last: toSvgPoint(e) };
+  function beginStroke(e, kind) {
+    ui.stroke = { kind, id: e.pointerId, mode: null, changed: false, last: toSvgPoint(e) };
     try { els.board.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    const el = e.target.closest('[data-e]');
-    if (el) paintEdge(Number(el.dataset.e));
+    const attr = kind === 'tree' ? 'e' : 'p';
+    const el = e.target.closest(`[data-${attr}]`);
+    if (el) paintEdge(Number(el.dataset[attr]));
   }
 
   function strokeMove(e) {
     const s = ui.stroke;
     if (e.pointerId !== s.id) return;
-    const p = toSvgPoint(e), a = s.last;
+    const p = toSvgPoint(e), a = s.last, segs = strokeTargets[s.kind].segs();
     // Sample along the pointer's path so a fast sweep doesn't skip edges.
     const steps = Math.max(1, Math.ceil(Math.hypot(p.x - a.x, p.y - a.y) / 6));
     for (let i = 1; i <= steps; i++) {
-      const hit = edgeAt({ x: a.x + ((p.x - a.x) * i) / steps, y: a.y + ((p.y - a.y) * i) / steps });
+      const hit = edgeAt({ x: a.x + ((p.x - a.x) * i) / steps, y: a.y + ((p.y - a.y) * i) / steps }, segs);
       if (hit !== null) paintEdge(hit);
     }
     s.last = p;
@@ -1159,9 +1424,59 @@
     if (s && s.changed) save();
   }
 
+  // ---- connecting circle vertices: drag from one vertex to another, or click two in turn
+
+  function showBand(from, p, to) {
+    const b = els.linkBand;
+    b.setAttribute('x1', vx(from));
+    b.setAttribute('y1', vy(from));
+    b.setAttribute('x2', to !== null ? vx(to) : p.x);
+    b.setAttribute('y2', to !== null ? vy(to) : p.y);
+    b.setAttribute('class', `link-band${to !== null && hasCircleEdge(from, to) ? ' removing' : ''}`);
+    b.style.display = '';
+  }
+
+  function linkMove(e) {
+    const l = ui.link;
+    if (e.pointerId !== l.id) return;
+    if (!l.moved && Math.hypot(e.clientX - l.x, e.clientY - l.y) < 5) return;
+    l.moved = true;
+    const p = toSvgPoint(e), v = nearestVertex(p, VR + 12);
+    const to = v !== null && v !== l.from ? v : null;
+    setDrop(to);
+    showBand(l.from, p, to);
+  }
+
+  function endLink(e) {
+    const l = ui.link;
+    if (e && e.pointerId !== l.id) return;
+    ui.link = null;
+    els.linkBand.style.display = 'none';
+    const to = ui.dropV;
+    setDrop(null);
+    if (!e) { render(); return; }
+    if (l.moved) {
+      if (to !== null) { ui.linkFrom = null; toggleCircleEdge(l.from, to); }
+      else render();
+      return;
+    }
+    if (ui.linkFrom === null) ui.linkFrom = l.from;
+    else if (ui.linkFrom === l.from) ui.linkFrom = null;
+    else { const a = ui.linkFrom; ui.linkFrom = null; toggleCircleEdge(a, l.from); return; }
+    render();
+  }
+
   els.board.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    if (ui.replay === null && S.phase === 'tree') { beginStroke(e); return; }
+    if (ui.replay === null && S.phase === 'tree') { beginStroke(e, 'tree'); return; }
+    if (editingGraph()) {
+      const vEl = e.target.closest('[data-v]'), aEl = e.target.closest('[data-a]');
+      const v = vEl ? Number(vEl.dataset.v) : aEl ? ui.view.pos[Number(aEl.dataset.a)] : null;
+      if (v === null) { beginStroke(e, 'graph'); return; }
+      ui.link = { from: v, id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+      try { els.board.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      return;
+    }
     const el = e.target.closest('[data-a],[data-v],[data-e]');
     const a = el && el.dataset.a !== undefined ? Number(el.dataset.a) : null;
     ui.down = { el, a, x: e.clientX, y: e.clientY, id: e.pointerId, moved: false };
@@ -1172,6 +1487,7 @@
 
   els.board.addEventListener('pointermove', (e) => {
     if (ui.stroke) { strokeMove(e); return; }
+    if (ui.link) { linkMove(e); return; }
     const d = ui.down;
     if (!d || d.a === null || e.pointerId !== d.id || !canDrag()) return;
     if (!d.moved) {
@@ -1190,6 +1506,7 @@
 
   els.board.addEventListener('pointerup', (e) => {
     if (ui.stroke) { if (e.pointerId === ui.stroke.id) endStroke(); return; }
+    if (ui.link) { endLink(e); return; }
     const d = ui.down;
     ui.down = null;
     if (!d || e.pointerId !== d.id) return;
@@ -1212,6 +1529,7 @@
 
   els.board.addEventListener('pointercancel', () => {
     endStroke();
+    if (ui.link) endLink(null);
     ui.down = null;
     if (ui.drag) { ui.drag = null; setDrop(null); render(); }
   });
@@ -1269,7 +1587,7 @@
   // ---------------------------------------------------------------- wiring
 
   for (const b of $$('[data-tool]')) {
-    b.addEventListener('click', () => { ui.tool = b.dataset.tool; render(); });
+    b.addEventListener('click', () => { ui.tool = b.dataset.tool; ui.linkFrom = null; render(); });
   }
   btn.start.addEventListener('click', startGame);
 
@@ -1298,6 +1616,17 @@
   btn.rpResume.addEventListener('click', () => armed(btn.rpResume, 'Discard later steps?', resumeFromReplay));
   btn.rpExit.addEventListener('click', exitReplay);
 
+  for (const b of els.kindSeg.querySelectorAll('[data-kind]')) {
+    b.addEventListener('click', () => setKind(b.dataset.kind));
+  }
+  els.inCv.addEventListener('change', () => {
+    const k = clampInt(els.inCv.value, 2, MAX_CIRCLE, S.circle.k);
+    els.inCv.value = k;
+    setCircleSize(k);
+  });
+  for (const b of $$('[data-preset]')) {
+    b.addEventListener('click', () => setCircleEdges(circlePresets[b.dataset.preset](S.circle.k)));
+  }
   els.inRows.addEventListener('change', () => {
     const rows = clampInt(els.inRows.value, 1, MAX_ROWS, S.rows);
     els.inRows.value = rows;
@@ -1358,7 +1687,7 @@
     const url = URL.createObjectURL(new Blob([exportJSON()], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `grid-broadcast-${S.rows}x${S.n}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+    a.download = `grid-broadcast-${S.kind === 'grid' ? `${S.rows}x${S.n}` : `circle${S.circle.k}`}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
     document.body.append(a);
     a.click();
     a.remove();
@@ -1408,7 +1737,7 @@
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
     if (e.key === 'Escape') {
-      if (ui.selected !== null) { ui.selected = null; render(); }
+      if (ui.selected !== null || ui.linkFrom !== null) { ui.selected = null; ui.linkFrom = null; render(); }
       else if (ui.replay !== null) exitReplay();
       return;
     }

@@ -257,6 +257,12 @@ input[type="number"] {
 .sw-ign { fill: var(--surface); stroke: var(--ignorant); stroke-width: 1.5; }
 .sw-half { fill: var(--know); }
 .sw-x { stroke: var(--bad); stroke-width: 2; stroke-linecap: round; fill: none; }
+.sw-node { fill: var(--surface); stroke: var(--vertex); stroke-width: 1.4; }
+.sw-link { stroke: var(--tree); stroke-width: 2; stroke-linecap: round; }
+.kind-seg { justify-self: start; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { padding: 7px 10px; font-size: 13px; }
+.field-label { font-size: 0.82rem; color: var(--muted); }
 
 .player { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: 1 1 360px; }
 button.icon { padding: 7px 9px; }
@@ -323,6 +329,29 @@ button.icon svg { width: 16px; height: 16px; fill: currentColor; }
 .edge.off .edge-line { stroke: var(--edge-off); stroke-width: 2.2; stroke-dasharray: 0.5 9; }
 .edge.hot .edge-line { stroke-width: 10; }
 
+/* editing a circle graph: faint lines for missing edges, click or drag to toggle */
+.ghost { display: none; }
+.tool-edges .ghost { display: inline; }
+.ghost-line {
+  stroke: var(--edge-off);
+  stroke-width: 2;
+  stroke-dasharray: 0.5 7;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+.board.tool-edges { touch-action: none; }
+.tool-edges .edge-hit { stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.tool-edges .ghost:hover .ghost-line { stroke: var(--tree); stroke-width: 4; stroke-dasharray: none; opacity: 0.5; }
+.tool-edges .edge:hover .edge-line { stroke: var(--bad); opacity: 0.7; }
+.link-band {
+  stroke: var(--tree);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 8 6;
+  pointer-events: none;
+}
+.link-band.removing { stroke: var(--bad); }
+
 .trail {
   stroke: var(--muted);
   stroke-width: 2;
@@ -349,6 +378,8 @@ button.icon svg { width: 16px; height: 16px; fill: currentColor; }
 }
 .axis-col { font: 500 15px var(--font-math); }
 .axis-row { font: italic 20px var(--font-math); }
+.vlabel { font: italic 20px var(--font-math); fill: var(--muted); text-anchor: middle; pointer-events: none; }
+.vlabel .idx { font-style: normal; font-size: 13px; }
 .mode-setup .vertex, .mode-move .vertex { cursor: pointer; }
 .mode-setup .vertex:hover .vertex-disc { fill: var(--surface-2); stroke-width: 3; }
 .vertex.target .vertex-disc { fill: var(--tree-soft); stroke: var(--tree); stroke-width: 3; }
@@ -356,6 +387,7 @@ button.icon svg { width: 16px; height: 16px; fill: currentColor; }
 .vertex.target:hover .vertex-disc,
 .vertex.drop .vertex-disc { stroke-width: 5; }
 .mode-setup .vertex.drop .vertex-disc { stroke: var(--tree); }
+.vertex.linking .vertex-disc { fill: var(--tree-soft); stroke: var(--tree); stroke-width: 5; }
 
 /* ---------- board: agents ---------- */
 .agent { transition: transform 0.4s cubic-bezier(0.3, 0.7, 0.25, 1); }
@@ -369,6 +401,7 @@ button.icon svg { width: 16px; height: 16px; fill: currentColor; }
 .agent.selected .agent-halo { stroke: var(--tree); stroke-width: 3; stroke-dasharray: none; }
 .agent.dragging { transition: none; pointer-events: none; }
 .agent.tiny .agent-num { display: none; }
+.tool-edges .vertex, .tool-edges .agent { cursor: crosshair; }
 
 /* ---------- panels ---------- */
 .panels {

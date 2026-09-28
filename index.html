@@ -14,7 +14,7 @@
   <header class="masthead">
     <p class="eyebrow">Broadcasting with mobile agents</p>
     <h1>Grid Broadcast</h1>
-    <p class="sub">Agents live on the vertices of the grid <span class="math"><i>P</i><sub><i>m</i></sub> × <i>P</i><sub><i>n</i></sub></span> (<i>m</i> rows, <i>n</i> columns). Each round the tree player chooses a spanning tree, then the agent player moves agents along its edges. Whenever agents share a vertex and one of them is knowledgeable, they all become knowledgeable.</p>
+    <p class="sub">Agents live on the vertices of a graph: a grid <span class="math"><i>P</i><sub><i>m</i></sub> × <i>P</i><sub><i>n</i></sub></span>, or a graph you draw on up to seven vertices arranged in a circle. Each round the tree player chooses a spanning tree, then the agent player moves agents along its edges. Whenever agents share a vertex and one of them is knowledgeable, they all become knowledgeable.</p>
   </header>
 
   <section class="stage" aria-label="Game board">
@@ -24,15 +24,17 @@
     </div>
 
     <div class="board-wrap">
-      <svg id="board" class="board" role="img" aria-label="Grid graph with agents on its vertices">
+      <svg id="board" class="board" role="img" aria-label="Graph with agents on its vertices">
         <defs>
           <marker id="arrowhead" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto">
             <path class="arrowhead" d="M0,1 L9,5 L0,9 z"/>
           </marker>
         </defs>
         <g id="g-axes"></g>
+        <g id="g-ghosts"></g>
         <g id="g-edges"></g>
         <g id="g-trails"></g>
+        <line id="link-band" class="link-band" style="display: none"/>
         <g id="g-vertices"></g>
         <g id="g-agents"></g>
       </svg>
@@ -47,6 +49,7 @@
           <button type="button" data-tool="addI"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" class="sw-ign"/></svg>Add ignorant</button>
           <button type="button" data-tool="toggle"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" class="sw-ign"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" class="sw-half"/></svg>Toggle</button>
           <button type="button" data-tool="remove"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" class="sw-x"/></svg>Remove</button>
+          <button type="button" data-tool="edges" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 11.5 11.5 4.5" class="sw-link"/><circle cx="3.5" cy="12.5" r="2.3" class="sw-node"/><circle cx="12.5" cy="3.5" r="2.3" class="sw-node"/></svg>Connect vertices</button>
         </div>
         <span class="spacer"></span>
         <button type="button" class="primary" id="btn-start">Start game</button>
@@ -111,7 +114,11 @@
       <fieldset id="setup-fields">
         <div class="group">
           <h3>Graph</h3>
-          <div class="fields">
+          <div class="seg kind-seg" id="kind-seg" role="group" aria-label="Kind of graph">
+            <button type="button" data-kind="grid">Grid</button>
+            <button type="button" data-kind="circle">Circle</button>
+          </div>
+          <div class="fields" id="grid-fields">
             <div class="field">
               <label for="in-rows">Rows <span class="math"><i>m</i></span></label>
               <input type="number" id="in-rows" min="1" max="10" step="1">
@@ -120,6 +127,25 @@
               <label for="in-n">Columns <span class="math"><i>n</i></span></label>
               <input type="number" id="in-n" min="2" max="30" step="1">
             </div>
+          </div>
+          <div class="group" id="circle-fields" hidden>
+            <div class="fields">
+              <div class="field">
+                <label for="in-cv">Vertices</label>
+                <input type="number" id="in-cv" min="2" max="7" step="1">
+              </div>
+              <div class="field">
+                <span class="field-label" id="preset-label">Start from</span>
+                <div class="presets" role="group" aria-labelledby="preset-label">
+                  <button type="button" data-preset="cycle">Cycle</button>
+                  <button type="button" data-preset="path">Path</button>
+                  <button type="button" data-preset="star">Star</button>
+                  <button type="button" data-preset="complete">Complete</button>
+                  <button type="button" data-preset="empty">No edges</button>
+                </div>
+              </div>
+            </div>
+            <p class="hint">Pick <b>Connect vertices</b> under the board, then drag from one vertex to another to add or remove the edge between them.</p>
           </div>
           <p class="hint" id="graph-info"></p>
         </div>
