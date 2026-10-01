@@ -14,7 +14,7 @@
   <header class="masthead">
     <p class="eyebrow">Broadcasting with mobile agents</p>
     <h1>Grid Broadcast</h1>
-    <p class="sub">Agents live on the vertices of a graph: a grid <span class="math"><i>P</i><sub><i>m</i></sub> × <i>P</i><sub><i>n</i></sub></span>, or a graph you draw on up to seven vertices arranged in a circle. Each round the tree player chooses a spanning tree, then the agent player moves agents along its edges. Whenever agents share a vertex and one of them is knowledgeable, they all become knowledgeable.</p>
+    <p class="sub">Agents live on the vertices of a graph: a grid <span class="math"><i>P</i><sub><i>m</i></sub> × <i>P</i><sub><i>n</i></sub></span>, a graph you draw on up to seven vertices arranged in a circle, or a bipartite graph inside <span class="math"><i>K</i><sub><i>m</i>,<i>n</i></sub></span>. Each round the tree player chooses a spanning tree, then the agent player moves agents along its edges. Whenever agents share a vertex and one of them is knowledgeable, they all become knowledgeable.</p>
   </header>
 
   <section class="stage" aria-label="Game board">
@@ -117,6 +117,7 @@
           <div class="seg kind-seg" id="kind-seg" role="group" aria-label="Kind of graph">
             <button type="button" data-kind="grid">Grid</button>
             <button type="button" data-kind="circle">Circle</button>
+            <button type="button" data-kind="bip">Bipartite</button>
           </div>
           <div class="fields" id="grid-fields">
             <div class="field">
@@ -146,6 +147,26 @@
               </div>
             </div>
             <p class="hint">Pick <b>Connect vertices</b> under the board, then drag from one vertex to another to add or remove the edge between them.</p>
+          </div>
+          <div class="group" id="bip-fields" hidden>
+            <div class="fields">
+              <div class="field">
+                <label for="in-bm">Top <span class="math"><i>m</i></span></label>
+                <input type="number" id="in-bm" min="1" max="10" step="1">
+              </div>
+              <div class="field">
+                <label for="in-bn">Bottom <span class="math"><i>n</i></span></label>
+                <input type="number" id="in-bn" min="1" max="10" step="1">
+              </div>
+              <div class="field">
+                <span class="field-label" id="bpreset-label">Start from</span>
+                <div class="presets" role="group" aria-labelledby="bpreset-label">
+                  <button type="button" data-bpreset="complete">Complete</button>
+                  <button type="button" data-bpreset="empty">No edges</button>
+                </div>
+              </div>
+            </div>
+            <p class="hint">Pick <b>Connect vertices</b> under the board, then drag from a top vertex to a bottom vertex to add or remove the edge between them, or drag across edges to remove them.</p>
           </div>
           <p class="hint" id="graph-info"></p>
         </div>

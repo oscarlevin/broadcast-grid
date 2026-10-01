@@ -11,6 +11,9 @@
  *  - circle: k <= 7 vertices v1..vk evenly spaced on a circle, with any set of
  *    edges the user draws (a subgraph of Kk). Edges are numbered in
  *    lexicographic order of their endpoints.
+ *  - bip: a subgraph of Km,n. Top vertices u1..um are v = 0..m-1, bottom
+ *    vertices w1..wn are v = m..m+n-1. Edges are stored as [i, j] for ui-wj
+ *    and numbered in lexicographic order of (i, j).
  */
 (() => {
   'use strict';
@@ -19,7 +22,8 @@
   const STORE_KEY = 'grid-broadcast/v1';
   const GAP = 104, PAD_L = 72, PAD_R = 50, PAD_T = 62, PAD_B = 42, VR = 24;
   const CIRCLE_R = 150, CIRCLE_LABEL = 46, CIRCLE_PAD = 26;
-  const MAX_ROWS = 10, MAX_COLS = 30, MAX_CIRCLE = 7;
+  const BIP_SEP = 250, BIP_PAD_X = 60, BIP_PAD_Y = 72, BIP_MIN_W = 320;
+  const MAX_ROWS = 10, MAX_COLS = 30, MAX_CIRCLE = 7, MAX_BIP = 10;
   const MAX_AGENTS = 80, MAX_STEPS = 6, PLAY_MS = 1100;
 
   const $ = (sel) => document.querySelector(sel);
@@ -74,6 +78,8 @@
     }
     return {
       kind: 'circle', k, px, py, order, center: c, ...withEdges(k, pairs),
+      slots: allPairs(k),
+      pairs: new Set(pairs.map(([a, b]) => pairId(a, b))),
       W: 2 * c,
       H: 2 * c,
       name: (v) => 'v' + (v + 1),
@@ -81,15 +87,46 @@
     };
   }
 
-  function graphFromState(s) {
-    return s.kind === 'circle' ? circleGraph(s.circle.k, s.circle.edges) : gridGraph(s.rows, s.n);
+  // Top part u1..um and bottom part w1..wn, each centred on its own row.
+  function bipGraph(m, n, edges) {
+    const pairs = edges.map(([i, j]) => [i, m + j]);
+    const W = Math.max(BIP_MIN_W, 2 * BIP_PAD_X + (Math.max(m, n) - 1) * GAP), px = [], py = [], order = [];
+    for (let v = 0; v < m + n; v++) {
+      const top = v < m, i = top ? v : v - m, size = top ? m : n;
+      px.push(W / 2 + (i - (size - 1) / 2) * GAP);
+      py.push(top ? BIP_PAD_Y : BIP_PAD_Y + BIP_SEP);
+      order.push(v);
+    }
+    return {
+      kind: 'bip', m, n, px, py, order, ...withEdges(m + n, pairs),
+      slots: bipPairs(m, n),
+      pairs: new Set(pairs.map(([a, b]) => pairId(a, b))),
+      W,
+      H: 2 * BIP_PAD_Y + BIP_SEP,
+      name: (v) => (v < m ? 'u' + (v + 1) : 'w' + (v - m + 1)),
+      nameParts: (v) => (v < m ? ['u', v + 1] : ['w', v - m + 1]),
+    };
   }
 
-  // Every pair of circle vertices: the potential edges of Kk. Pair ids are a*8 + b.
-  const pairId = (a, b) => Math.min(a, b) * 8 + Math.max(a, b);
+  function graphFromState(s) {
+    if (s.kind === 'circle') return circleGraph(s.circle.k, s.circle.edges);
+    if (s.kind === 'bip') return bipGraph(s.bip.m, s.bip.n, s.bip.edges);
+    return gridGraph(s.rows, s.n);
+  }
+
+  // Potential edges ("slots") of the graphs drawn by hand: every pair of circle
+  // vertices (Kk), or every top-bottom pair (Km,n). Pair ids are a*32 + b with a < b.
+  const PAIR_BASE = 32;
+  const pairId = (a, b) => Math.min(a, b) * PAIR_BASE + Math.max(a, b);
+  const pairOf = (id) => [Math.floor(id / PAIR_BASE), id % PAIR_BASE];
   function allPairs(k) {
     const out = [];
     for (let a = 0; a < k; a++) for (let b = a + 1; b < k; b++) out.push({ id: pairId(a, b), a, b });
+    return out;
+  }
+  function bipPairs(m, n) {
+    const out = [];
+    for (let i = 0; i < m; i++) for (let j = 0; j < n; j++) out.push({ id: pairId(i, m + j), a: i, b: m + j });
     return out;
   }
 
@@ -101,8 +138,25 @@
       const [a, b] = p;
       if (Number.isInteger(a) && Number.isInteger(b) && a !== b && a >= 0 && b >= 0 && a < k && b < k) ids.add(pairId(a, b));
     }
-    return [...ids].sort((x, y) => x - y).map((id) => [Math.floor(id / 8), id % 8]);
+    return [...ids].sort((x, y) => x - y).map(pairOf);
   }
+
+  // Sorted, de-duplicated edge list [i, j] (for ui-wj) for a subgraph of Km,n.
+  function normalizeBip(m, n, edges) {
+    const ids = new Set();
+    for (const p of edges) {
+      if (!Array.isArray(p)) continue;
+      const [i, j] = p;
+      if (Number.isInteger(i) && Number.isInteger(j) && i >= 0 && j >= 0 && i < m && j < n) ids.add(i * PAIR_BASE + j);
+    }
+    return [...ids].sort((x, y) => x - y).map(pairOf);
+  }
+
+  const bipComplete = (m, n) => bipPairs(m, n).map(({ a, b }) => [a, b - m]);
+  const bipPresets = {
+    complete: bipComplete,
+    empty: () => [],
+  };
 
   const circlePresets = {
     cycle: (k) => Array.from({ length: k }, (_, i) => [i, (i + 1) % k]).filter(([a, b]) => k > 2 || a < b),
@@ -276,6 +330,7 @@
       rows,
       n,
       circle: { k: 7, edges: normalizePairs(7, circlePresets.cycle(7)) },
+      bip: { m: 3, n: 4, edges: bipComplete(3, 4) },
       rules: { steps: 1, exchange: 'end' },
       setup: [
         { pos: at(0, 0), know: true },
@@ -302,10 +357,12 @@
       const n = s.n, rows = s.rows ?? 2; // files saved before rows existed were ladders
       if (!Number.isInteger(n) || n < 2 || n > MAX_COLS) return null;
       if (!Number.isInteger(rows) || rows < 1 || rows > MAX_ROWS) return null;
-      const kind = s.kind === 'circle' ? 'circle' : 'grid';
+      const kind = ['circle', 'bip'].includes(s.kind) ? s.kind : 'grid';
       const k = clampInt(s.circle?.k, 2, MAX_CIRCLE, 7);
       const circle = { k, edges: normalizePairs(k, Array.isArray(s.circle?.edges) ? s.circle.edges : circlePresets.cycle(k)) };
-      const g = graphFromState({ kind, rows, n, circle });
+      const bm = clampInt(s.bip?.m, 1, MAX_BIP, 3), bn = clampInt(s.bip?.n, 1, MAX_BIP, 4);
+      const bip = { m: bm, n: bn, edges: normalizeBip(bm, bn, Array.isArray(s.bip?.edges) ? s.bip.edges : bipComplete(bm, bn)) };
+      const g = graphFromState({ kind, rows, n, circle, bip });
       const V = g.V, E = g.edges.length;
       const isV = (x) => Number.isInteger(x) && x >= 0 && x < V;
       const isE = (x) => Number.isInteger(x) && x >= 0 && x < E;
@@ -340,6 +397,7 @@
         rows,
         n,
         circle,
+        bip,
         rules: {
           steps: clampInt(s.rules?.steps, 1, MAX_STEPS, 1),
           exchange: s.rules?.exchange === 'land' ? 'land' : 'end',
@@ -434,7 +492,7 @@
   function commit() { save(); render(); }
 
   function pushUndo() {
-    ui.undo.push(JSON.stringify({ setup: S.setup, tree: S.tree, plan: S.plan, circleEdges: S.circle.edges }));
+    ui.undo.push(JSON.stringify({ setup: S.setup, tree: S.tree, plan: S.plan, circleEdges: S.circle.edges, bipEdges: S.bip.edges }));
     if (ui.undo.length > 300) ui.undo.shift();
   }
 
@@ -443,8 +501,10 @@
     const snap = JSON.parse(ui.undo.pop());
     if (S.phase === 'setup') {
       S.setup = snap.setup;
-      if (JSON.stringify(S.circle.edges) !== JSON.stringify(snap.circleEdges)) {
+      if (JSON.stringify(S.circle.edges) !== JSON.stringify(snap.circleEdges) ||
+          JSON.stringify(S.bip.edges) !== JSON.stringify(snap.bipEdges)) {
         S.circle.edges = snap.circleEdges;
+        S.bip.edges = snap.bipEdges;
         buildBoard();
       }
       syncCountInputs();
@@ -585,13 +645,13 @@
     commit();
   }
 
-  // Switch between the grid and the circle graph; agents keep their vertex number mod V.
+  // Switch between kinds of graph; agents keep their vertex number mod V.
   function setKind(kind) {
     if (S.phase !== 'setup' || kind === S.kind) return;
     S.kind = kind;
     const V = graphFromState(S).V;
     for (const x of S.setup) x.pos %= V;
-    if (kind === 'circle') ui.tool = 'edges';
+    if (drawnKind()) ui.tool = 'edges';
     else if (ui.tool === 'edges') ui.tool = 'addK';
     ui.linkFrom = null;
     ui.undo = [];
@@ -616,22 +676,48 @@
     commit();
   }
 
-  function setCircleEdges(pairs) {
-    if (S.phase !== 'setup' || S.kind !== 'circle') return;
+  // Change the sizes of the two parts, keeping agents on their side. A complete
+  // bipartite graph stays complete; otherwise edges at removed vertices are dropped.
+  function setBipSize(m, n) {
+    const old = S.bip;
+    if (S.phase !== 'setup' || S.kind !== 'bip' || (m === old.m && n === old.n)) return;
+    const complete = old.edges.length === old.m * old.n;
+    for (const x of S.setup) x.pos = x.pos < old.m ? Math.min(x.pos, m - 1) : m + Math.min(x.pos - old.m, n - 1);
+    S.bip = { m, n, edges: complete ? bipComplete(m, n) : normalizeBip(m, n, old.edges) };
+    ui.linkFrom = null;
+    ui.undo = [];
+    buildBoard();
+    commit();
+  }
+
+  // ---- editing a hand-drawn graph (circle or bipartite), with edges as vertex pairs
+
+  const drawnKind = () => S.kind === 'circle' || S.kind === 'bip';
+  const hasEdge = (a, b) => G.pairs.has(pairId(a, b));
+  const canLink = (a, b) => a !== b && (G.kind !== 'bip' || (a < G.m) !== (b < G.m));
+  const currentPairs = () => G.edges.map((e) => [e.a, e.b]);
+
+  // Store pairs of vertices as the current graph's edges, dropping any that cannot be edges.
+  function storeEdges(pairs) {
+    if (S.kind === 'circle') { S.circle.edges = normalizePairs(S.circle.k, pairs); return; }
+    const m = S.bip.m;
+    S.bip.edges = normalizeBip(m, S.bip.n, pairs.map(([a, b]) => (a < b ? [a, b - m] : [b, a - m])));
+  }
+
+  function setGraphEdges(pairs) {
+    if (S.phase !== 'setup' || !drawnKind()) return;
     pushUndo();
-    S.circle.edges = normalizePairs(S.circle.k, pairs);
+    storeEdges(pairs);
     ui.linkFrom = null;
     buildBoard();
     commit();
   }
 
-  const hasCircleEdge = (a, b) => S.circle.edges.some(([x, y]) => pairId(x, y) === pairId(a, b));
-
-  function toggleCircleEdge(a, b) {
-    if (a === b) return;
-    setCircleEdges(hasCircleEdge(a, b)
-      ? S.circle.edges.filter(([x, y]) => pairId(x, y) !== pairId(a, b))
-      : [...S.circle.edges, [a, b]]);
+  function toggleEdge(a, b) {
+    if (!canLink(a, b)) return;
+    setGraphEdges(hasEdge(a, b)
+      ? currentPairs().filter(([x, y]) => pairId(x, y) !== pairId(a, b))
+      : [...currentPairs(), [a, b]]);
   }
 
   // ---------------------------------------------------------------- replay
@@ -701,11 +787,17 @@
             graph: `P${S.rows} x P${S.n}`,
             vertices: 'row letter + column number, e.g. b3 = second row, third column',
           }
-          : {
-            graph: `circle graph on ${G.V} vertices`,
-            vertices: 'v1..vk clockwise from the top',
-            edges: G.edges.map((e) => `${L(e.a)}-${L(e.b)}`),
-          }),
+          : G.kind === 'circle'
+            ? {
+              graph: `circle graph on ${G.V} vertices`,
+              vertices: 'v1..vk clockwise from the top',
+              edges: G.edges.map((e) => `${L(e.a)}-${L(e.b)}`),
+            }
+            : {
+              graph: `bipartite subgraph of K${G.m},${G.n}${G.edges.length === G.m * G.n ? ' (complete)' : ''}`,
+              vertices: 'u1..um on top, w1..wn on the bottom, left to right',
+              edges: G.edges.map((e) => `${L(e.a)}-${L(e.b)}`),
+            }),
         rules: S.rules,
         start: S.history[0]
           ? S.history[0].pos.map((v, a) => ({ agent: a + 1, at: L(v), knowledgeable: S.history[0].know[a] }))
@@ -750,7 +842,10 @@
     kindSeg: $('#kind-seg'),
     gridFields: $('#grid-fields'),
     circleFields: $('#circle-fields'),
+    bipFields: $('#bip-fields'),
     inCv: $('#in-cv'),
+    inBm: $('#in-bm'),
+    inBn: $('#in-bn'),
     gTrails: $('#g-trails'),
     gVertices: $('#g-vertices'),
     gAgents: $('#g-agents'),
@@ -844,23 +939,26 @@
         els.gAxes.append(t);
       }
     } else {
-      // Vertex names just outside the circle, and faint lines for every edge not yet drawn.
+      // Vertex names just outside the circle (or above and below the two rows),
+      // and faint lines for every edge not yet drawn.
       for (let v = 0; v < G.V; v++) {
-        const dx = vx(v) - G.center, dy = vy(v) - G.center, d = Math.hypot(dx, dy) || 1;
-        const t = svg('text', {
-          x: vx(v) + (dx / d) * (VR + 20),
-          y: vy(v) + (dy / d) * (VR + 20) + 6,
-          class: 'vlabel',
-        });
+        let dx = 0, dy = vy(v) < G.H / 2 ? -1 : 1;
+        if (G.kind === 'circle') {
+          dx = vx(v) - G.center; dy = vy(v) - G.center;
+          const d = Math.hypot(dx, dy) || 1;
+          dx /= d; dy /= d;
+        }
+        const t = svg('text', { x: vx(v) + dx * (VR + 20), y: vy(v) + dy * (VR + 20) + 6, class: 'vlabel' });
+        const [l, i] = G.nameParts(v);
         const letter = svg('tspan');
-        letter.textContent = 'v';
+        letter.textContent = l;
         const idx = svg('tspan', { class: 'idx', dy: 4 });
-        idx.textContent = v + 1;
+        idx.textContent = i;
         t.append(letter, idx);
         els.gAxes.append(t);
       }
-      for (const p of allPairs(G.V)) {
-        if (hasCircleEdge(p.a, p.b)) continue;
+      for (const p of G.slots) {
+        if (G.pairs.has(p.id)) continue;
         const c = { x1: vx(p.a), y1: vy(p.a), x2: vx(p.b), y2: vy(p.b) };
         const g = svg('g', { class: 'ghost', 'data-p': p.id });
         g.append(svg('line', { ...c, class: 'ghost-line' }), svg('line', { ...c, class: 'edge-hit' }));
@@ -869,7 +967,7 @@
     }
 
     edgeEls = G.edges.map((e) => {
-      const g = svg('g', { class: 'edge', 'data-e': e.id, ...(G.kind === 'circle' ? { 'data-p': pairId(e.a, e.b) } : {}) });
+      const g = svg('g', { class: 'edge', 'data-e': e.id, ...(G.slots ? { 'data-p': pairId(e.a, e.b) } : {}) });
       const c = { x1: vx(e.a), y1: vy(e.a), x2: vx(e.b), y2: vy(e.b) };
       g.append(svg('line', { ...c, class: 'edge-line' }), svg('line', { ...c, class: 'edge-hit' }));
       els.gEdges.append(g);
@@ -1105,7 +1203,7 @@
         };
         if (editingGraph()) {
           html = ui.linkFrom !== null
-            ? `Click another vertex to connect it to ${labelHTML(ui.linkFrom)}, or click ${labelHTML(ui.linkFrom)} again to cancel.`
+            ? `Click ${G.kind === 'bip' ? 'a vertex on the other side' : 'another vertex'} to connect it to ${labelHTML(ui.linkFrom)}, or click ${labelHTML(ui.linkFrom)} again to cancel.`
             : 'Drag from one vertex to another, or click two vertices in turn, to add or remove the edge between them. Click or drag across an edge to remove it.';
         } else {
           html = `${tips[ui.tool]} Drag agents to move them.`;
@@ -1173,7 +1271,7 @@
     if (view.mode === 'setup') {
       for (const b of $$('[data-tool]')) {
         b.setAttribute('aria-pressed', String(b.dataset.tool === ui.tool));
-        if (b.dataset.tool === 'edges') b.hidden = S.kind !== 'circle';
+        if (b.dataset.tool === 'edges') b.hidden = !drawnKind();
       }
       btn.start.disabled = !S.setup.length || !isConnected();
     } else if (view.mode === 'tree') {
@@ -1216,14 +1314,17 @@
     for (const b of els.kindSeg.querySelectorAll('[data-kind]')) b.setAttribute('aria-pressed', String(b.dataset.kind === S.kind));
     els.gridFields.hidden = S.kind !== 'grid';
     els.circleFields.hidden = S.kind !== 'circle';
+    els.bipFields.hidden = S.kind !== 'bip';
     setVal(els.inRows, S.rows);
     setVal(els.inN, S.n);
     setVal(els.inCv, S.circle.k);
+    setVal(els.inBm, S.bip.m);
+    setVal(els.inBn, S.bip.n);
     setVal(els.inSteps, S.rules.steps);
     els.exEnd.checked = S.rules.exchange === 'end';
     els.exLand.checked = S.rules.exchange === 'land';
 
-    const key = G.kind === 'grid' ? `grid ${G.rows}x${G.n}` : `circle ${JSON.stringify(S.circle)}`;
+    const key = G.kind === 'grid' ? `grid ${G.rows}x${G.n}` : `${G.kind} ${JSON.stringify(G.kind === 'circle' ? S.circle : S.bip)}`;
     if (els.graphInfo.dataset.key !== key) {
       els.graphInfo.dataset.key = key;
       let html = `<b>${G.V}</b> vertices, <b>${G.edges.length}</b> edge${G.edges.length === 1 ? '' : 's'}. `;
@@ -1232,6 +1333,9 @@
         html += `Every spanning tree has <b>${G.V - 1}</b> edges, and there are <b>${gridTreeCount(G.rows, G.n)}</b> of them. ` +
           `Vertex ${labelHTML(er * G.n + ec)} is in row ${rowName(er)}, column ${ec + 1}.`;
       } else if (isConnected()) {
+        if (G.kind === 'bip' && G.edges.length === G.m * G.n) {
+          html += `This is the complete bipartite graph <span class="math"><i>K</i><sub>${G.m},${G.n}</sub></span>. `;
+        }
         html += `Every spanning tree has <b>${G.V - 1}</b> edges, and there ${G.edges.length === G.V - 1 ? 'is just <b>1</b>: the graph is already a tree.' : `are <b>${treeCountExact().toLocaleString('en-US')}</b> of them.`}`;
       } else {
         html += 'It is not connected yet, so it has no spanning tree.';
@@ -1343,10 +1447,10 @@
 
   // ---- painting edges: click or drag across edges to add or remove them.
   // A 'tree' stroke edits the tree player's selection; a 'graph' stroke edits
-  // the edges of a circle graph during setup (over every pair of vertices).
+  // the edges of a hand-drawn graph during setup (over every potential edge).
 
   const editingGraph = () =>
-    ui.replay === null && S.phase === 'setup' && S.kind === 'circle' && ui.tool === 'edges';
+    ui.replay === null && S.phase === 'setup' && drawnKind() && ui.tool === 'edges';
 
   const strokeTargets = {
     tree: {
@@ -1355,13 +1459,10 @@
       set: (id, on) => { S.tree = on ? [...S.tree, id] : S.tree.filter((x) => x !== id); },
     },
     graph: {
-      segs: () => allPairs(G.V),
-      has: (id) => hasCircleEdge(Math.floor(id / 8), id % 8),
+      segs: () => G.slots,
+      has: (id) => G.pairs.has(id),
       set: (id, on) => {
-        const a = Math.floor(id / 8), b = id % 8;
-        S.circle.edges = normalizePairs(S.circle.k, on
-          ? [...S.circle.edges, [a, b]]
-          : S.circle.edges.filter(([x, y]) => pairId(x, y) !== id));
+        storeEdges(on ? [...currentPairs(), pairOf(id)] : currentPairs().filter(([x, y]) => pairId(x, y) !== id));
         buildBoard();
       },
     },
@@ -1424,7 +1525,7 @@
     if (s && s.changed) save();
   }
 
-  // ---- connecting circle vertices: drag from one vertex to another, or click two in turn
+  // ---- connecting vertices of a hand-drawn graph: drag from one vertex to another, or click two in turn
 
   function showBand(from, p, to) {
     const b = els.linkBand;
@@ -1432,7 +1533,7 @@
     b.setAttribute('y1', vy(from));
     b.setAttribute('x2', to !== null ? vx(to) : p.x);
     b.setAttribute('y2', to !== null ? vy(to) : p.y);
-    b.setAttribute('class', `link-band${to !== null && hasCircleEdge(from, to) ? ' removing' : ''}`);
+    b.setAttribute('class', `link-band${to !== null && hasEdge(from, to) ? ' removing' : ''}`);
     b.style.display = '';
   }
 
@@ -1442,7 +1543,7 @@
     if (!l.moved && Math.hypot(e.clientX - l.x, e.clientY - l.y) < 5) return;
     l.moved = true;
     const p = toSvgPoint(e), v = nearestVertex(p, VR + 12);
-    const to = v !== null && v !== l.from ? v : null;
+    const to = v !== null && canLink(l.from, v) ? v : null;
     setDrop(to);
     showBand(l.from, p, to);
   }
@@ -1456,13 +1557,14 @@
     setDrop(null);
     if (!e) { render(); return; }
     if (l.moved) {
-      if (to !== null) { ui.linkFrom = null; toggleCircleEdge(l.from, to); }
+      if (to !== null) { ui.linkFrom = null; toggleEdge(l.from, to); }
       else render();
       return;
     }
     if (ui.linkFrom === null) ui.linkFrom = l.from;
     else if (ui.linkFrom === l.from) ui.linkFrom = null;
-    else { const a = ui.linkFrom; ui.linkFrom = null; toggleCircleEdge(a, l.from); return; }
+    else if (!canLink(ui.linkFrom, l.from)) ui.linkFrom = l.from;
+    else { const a = ui.linkFrom; ui.linkFrom = null; toggleEdge(a, l.from); return; }
     render();
   }
 
@@ -1625,7 +1727,23 @@
     setCircleSize(k);
   });
   for (const b of $$('[data-preset]')) {
-    b.addEventListener('click', () => setCircleEdges(circlePresets[b.dataset.preset](S.circle.k)));
+    b.addEventListener('click', () => setGraphEdges(circlePresets[b.dataset.preset](S.circle.k)));
+  }
+  els.inBm.addEventListener('change', () => {
+    const m = clampInt(els.inBm.value, 1, MAX_BIP, S.bip.m);
+    els.inBm.value = m;
+    setBipSize(m, S.bip.n);
+  });
+  els.inBn.addEventListener('change', () => {
+    const n = clampInt(els.inBn.value, 1, MAX_BIP, S.bip.n);
+    els.inBn.value = n;
+    setBipSize(S.bip.m, n);
+  });
+  for (const b of $$('[data-bpreset]')) {
+    b.addEventListener('click', () => {
+      const { m, n } = S.bip;
+      setGraphEdges(bipPresets[b.dataset.bpreset](m, n).map(([i, j]) => [i, m + j]));
+    });
   }
   els.inRows.addEventListener('change', () => {
     const rows = clampInt(els.inRows.value, 1, MAX_ROWS, S.rows);
@@ -1687,7 +1805,8 @@
     const url = URL.createObjectURL(new Blob([exportJSON()], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `grid-broadcast-${S.kind === 'grid' ? `${S.rows}x${S.n}` : `circle${S.circle.k}`}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+    const shape = { grid: `${S.rows}x${S.n}`, circle: `circle${S.circle.k}`, bip: `bip${S.bip.m}x${S.bip.n}` }[S.kind];
+    a.download = `grid-broadcast-${shape}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
     document.body.append(a);
     a.click();
     a.remove();
